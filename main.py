@@ -1,8 +1,12 @@
-from console import banner,Menu
+from console import *
+import asyncio
 
 
-if __name__ == "__main__":
+async def main():
+    if __name__ == "__main__":
 
-    banner()
-    Menu()
+        await banner()
+        await menu()
 
+
+asyncio.run(main())
