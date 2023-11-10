@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 import re
 import time
 import os
-
+import asyncio
 from tqdm import tqdm
 
 
@@ -99,6 +99,48 @@ async def get_game_info(client, game_url: str):
         return {'Название': '', 'Рейтинг': ''}
 
 
+async def parse_games_part(client, part_num, total_pages, all_games):
+    """
+    Функция парсинга игр для потока
+    :param client: AsyncClient httpx
+    :param part_num: номер потока
+    :param total_pages: общее количество страниц
+    :param all_games: массив для хранения всех игр
+    :return:
+    """
+    part_size = total_pages // 4
+    start_page = part_num * part_size + 1
+    end_page = start_page + part_size if part_num < 3 else total_pages + 1
+
+    part_games = []
+
+    with tqdm(total=end_page-start_page, desc='Прогресс') as pbar:
+
+        for i in range(start_page, end_page):
+
+            resp = await client.get(GAMES_CATALOG_URL.format(i))
+            page_data = BeautifulSoup(resp.text, 'html.parser')
+
+            main_block = page_data.find(attrs={'id': 'main-content'})
+
+            games = main_block.find(attrs={'id': 'w0'}).find(class_='_games-grid_6d5zv_320').find_all('div', recursive=False)
+
+            for game in games:
+
+                try:
+                    game_url = game.find('a')['href']
+
+                    game_data = await get_game_info(client, game_url)  # получение информации по игре
+
+                    part_games.append(game_data)
+                except:
+                    part_games.append({'Название': '', 'Рейтинг': ''})
+
+            pbar.update(1)
+
+    all_games.append(part_games)
+
+
 async def parse_games():
     """
     Парсинг игр
@@ -115,31 +157,17 @@ async def parse_games():
 
             all_games = []
 
-            with tqdm(total=pages, desc='Прогресс') as pbar:
+            tasks = []
 
-                for i in range(1, pages+1):
+            for i in range(4):
+                task = asyncio.create_task(parse_games_part(client, i, pages, all_games))
+                tasks.append(task)
 
-                    resp = await client.get(GAMES_CATALOG_URL.format(i))
-                    page_data = BeautifulSoup(resp.text, 'html.parser')
+            await asyncio.gather(*tasks)
 
-                    main_block = page_data.find(attrs={'id': 'main-content'})
+            flat_all_games = [item for sublist in all_games for item in sublist]
 
-                    games = main_block.find(attrs={'id': 'w0'}).find(class_='_games-grid_6d5zv_320').find_all('div', recursive=False)
-
-                    for game in games:
-
-                        try:
-                            game_url = game.find('a')['href']
-
-                            game_data = await get_game_info(client, game_url)  # получение информации по игре
-
-                            all_games.append(game_data)
-                        except:
-                            all_games.append({'Название': '', 'Рейтинг': ''})
-
-                    pbar.update(1)
-
-            file_name = await load_to_csv(all_games, ['Название', 'Рейтинг'], 'games')
+            file_name = await load_to_csv(flat_all_games, ['Название', 'Рейтинг'], 'games')
 
         except:
             pass
@@ -157,15 +185,15 @@ async def parse_blogs():
 
     async with httpx.AsyncClient(http2=True) as client:
 
-        try:
+        pages = await get_pages_count(client, BLOGS_URL.format(1))  # нахождение количества страниц
 
-            pages = await get_pages_count(client, BLOGS_URL.format(1))  # нахождение количества страниц
+        all_blogs = []
 
-            all_blogs = []
+        with tqdm(total=pages, desc='Прогресс') as pbar:
 
-            with tqdm(total=pages, desc='Прогресс') as pbar:
+            for i in range(1, pages+1):
 
-                for i in range(1, pages+1):
+                try:
 
                     resp = await client.get(BLOGS_URL.format(i))
                     page_data = BeautifulSoup(resp.text, 'html.parser')
@@ -198,11 +226,12 @@ async def parse_blogs():
 
                         all_blogs.append({'Рейтинг': blog_rate, 'Заголовок': blog_title, 'Ссылка': blog_url})
 
-                    pbar.update(1)
+                except:
+                    pass
 
-            file_name = await load_to_csv(all_blogs, ['Рейтинг', 'Заголовок', 'Ссылка'], 'blogs')
-        except:
-            pass
+                pbar.update(1)
+
+        file_name = await load_to_csv(all_blogs, ['Рейтинг', 'Заголовок', 'Ссылка'], 'blogs')
 
         return file_name
 
@@ -217,15 +246,16 @@ async def parse_news():
 
     async with httpx.AsyncClient(http2=True) as client:
 
-        try:
 
-            pages = await get_pages_count(client, NEWS_URL.format(1))  # нахождение количества страниц
+        pages = await get_pages_count(client, NEWS_URL.format(1))  # нахождение количества страниц
 
-            all_news = []
+        all_news = []
 
-            with tqdm(total=pages, desc='Прогресс') as pbar:
+        with tqdm(total=pages, desc='Прогресс') as pbar:
 
-                for i in range(1, pages+1):
+            for i in range(1, pages+1):
+
+                try:
 
                     resp = await client.get(NEWS_URL.format(i))
                     page_data = BeautifulSoup(resp.text, 'html.parser')
@@ -251,12 +281,11 @@ async def parse_news():
                             pass
 
                         all_news.append({'Заголовок': new_title, 'Ссылка': new_url})
+                except:
+                    pass
 
-                    pbar.update(1)
+                pbar.update(1)
 
-            file_name = await load_to_csv(all_news, ['Заголовок', 'Ссылка'], 'news')
-
-        except:
-            pass
+        file_name = await load_to_csv(all_news, ['Заголовок', 'Ссылка'], 'news')
 
         return file_name
